@@ -9,7 +9,7 @@ COPY prisma ./prisma/
 COPY tsconfig*.json ./
 
 # Install ALL dependencies (including devDependencies needed for build)
-RUN npm ci
+RUN npm install --legacy-peer-deps
 
 # Generate Prisma client
 RUN npx prisma generate
@@ -37,7 +37,7 @@ COPY package*.json ./
 COPY prisma ./prisma/
 
 # Install production dependencies only
-RUN npm ci --omit=dev
+RUN npm install --omit=dev --legacy-peer-deps
 
 # Generate Prisma client in production layer
 RUN npx prisma generate
