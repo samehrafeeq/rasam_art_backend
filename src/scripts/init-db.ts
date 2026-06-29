@@ -71,10 +71,29 @@ function runMigrations() {
       ? '.\\node_modules\\.bin\\prisma'
       : './node_modules/.bin/prisma');
   try {
-    execSync(`${prismaBin} migrate deploy`, { stdio: 'inherit' });
+    execSync(`${prismaBin} migrate deploy`, { stdio: 'pipe' });
     console.log('✅ Migrations applied successfully.');
-  } catch (err) {
-    console.error('❌ Migration failed:', err);
+  } catch (err: any) {
+    const output = (err.stdout?.toString() || '') + (err.stderr?.toString() || '') + err.message;
+    
+    // Check if it's a P3009 failed migration error
+    const match = output.match(/The \`([^\`]+)\` migration started at/);
+    if (match && match[1]) {
+      const failedMigration = match[1];
+      console.log(`\n⚠️ Detected failed migration: ${failedMigration}`);
+      console.log(`Attempting to mark it as rolled-back and retry...`);
+      try {
+        execSync(`${prismaBin} migrate resolve --rolled-back ${failedMigration}`, { stdio: 'inherit' });
+        console.log(`✅ Resolved ${failedMigration}. Retrying deploy...`);
+        execSync(`${prismaBin} migrate deploy`, { stdio: 'inherit' });
+        console.log('✅ Migrations applied successfully.');
+        return;
+      } catch (resolveErr: any) {
+        console.error('❌ Auto-resolve failed:', resolveErr.message);
+      }
+    }
+    
+    console.error('❌ Migration failed:\n', output);
     process.exit(1);
   }
 }
