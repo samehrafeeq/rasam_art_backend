@@ -11,15 +11,15 @@ COPY tsconfig*.json ./
 # Install ALL dependencies (including devDependencies needed for build)
 RUN npm install --legacy-peer-deps
 
-# Generate Prisma client
-RUN npx prisma generate
+# Generate Prisma client using the locally installed version (not npx which downloads latest)
+RUN ./node_modules/.bin/prisma generate
 
 # Copy source and build
 COPY src ./src
 RUN npm run build
 
 # Compile the init script separately (it's not a NestJS module)
-RUN node_modules/.bin/tsc src/scripts/init-db.ts \
+RUN ./node_modules/.bin/tsc src/scripts/init-db.ts \
     --module commonjs \
     --moduleResolution node \
     --target ES2020 \
@@ -39,8 +39,8 @@ COPY prisma ./prisma/
 # Install production dependencies only
 RUN npm install --omit=dev --legacy-peer-deps
 
-# Generate Prisma client in production layer
-RUN npx prisma generate
+# Generate Prisma client using the locally installed version
+RUN ./node_modules/.bin/prisma generate
 
 # Copy built output from builder
 COPY --from=builder /app/dist ./dist

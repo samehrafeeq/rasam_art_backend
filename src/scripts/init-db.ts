@@ -64,8 +64,14 @@ async function createDatabaseIfNotExists() {
 
 function runMigrations() {
   console.log('\n📦 Running Prisma migrations...');
+  // Use local prisma binary to avoid npx downloading the latest version (v7+)
+  // which is incompatible with our schema format
+  const prismaBin = process.env.PRISMA_BIN ||
+    (process.platform === 'win32'
+      ? '.\\node_modules\\.bin\\prisma'
+      : './node_modules/.bin/prisma');
   try {
-    execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+    execSync(`${prismaBin} migrate deploy`, { stdio: 'inherit' });
     console.log('✅ Migrations applied successfully.');
   } catch (err) {
     console.error('❌ Migration failed:', err);
