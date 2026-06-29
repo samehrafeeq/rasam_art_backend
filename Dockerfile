@@ -3,6 +3,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# Install openssl required by Prisma engine on Alpine
+RUN apk add --no-cache openssl
+
 # Override NODE_ENV to development during build so all devDependencies are installed
 # (Coolify passes NODE_ENV=production at build-time which would skip devDeps)
 ENV NODE_ENV=development
@@ -36,13 +39,16 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
+# Install openssl required by Prisma engine on Alpine
+RUN apk add --no-cache openssl
+
 ENV NODE_ENV=production
 
 # Copy dependency manifests and prisma schema
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install production dependencies only (prisma CLI is now in dependencies, so it's included)
+# Install production dependencies only (prisma CLI is in dependencies)
 RUN npm install --omit=dev --legacy-peer-deps
 
 # Generate Prisma client using the locally installed version
