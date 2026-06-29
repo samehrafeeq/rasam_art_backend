@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `resetCode` VARCHAR(191) NULL,
+ALTER TABLE `User` ADD COLUMN `resetCode` VARCHAR(191) NULL,
     ADD COLUMN `resetCodeExpiry` DATETIME(3) NULL,
     ADD COLUMN `resetCodeLastSentAt` DATETIME(3) NULL;
 
