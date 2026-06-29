@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  phone     String   @unique
+  password  String
+  role                Role             @default(USER)
+  resetCode           String?
+  resetCodeExpiry     DateTime?
+  resetCodeLastSentAt DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  ServiceRequests     ServiceRequest[]
+}
+
+model WhatsappSession {
+  id    String @id
+  data  Json   @db.Json
+}
+
+model Region {
+  id                 Int              @id @default(autoincrement())
+  name               String
+  description        String?          @db.Text
+  phoneNumbers       String?          @db.Text
+  disabledServiceIds Json             @default("[]")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  ServiceRequests    ServiceRequest[]
+}
+
+enum RequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model ServiceRequest {
+  id           Int           @id @default(autoincrement())
+  user         User          @relation(fields: [userId], references: [id])
+  userId       Int
+  region       Region        @relation(fields: [regionId], references: [id])
+  regionId     Int
+  serviceId    Int
+  message      String?       @db.Text
+  status       RequestStatus @default(PENDING)
+  rejectReason String?       @db.Text
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model ContactMessage {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String
+  phone     String
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+}
