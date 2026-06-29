@@ -3,15 +3,19 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# Override NODE_ENV to development during build so all devDependencies are installed
+# (Coolify passes NODE_ENV=production at build-time which would skip devDeps)
+ENV NODE_ENV=development
+
 # Copy dependency manifests
 COPY package*.json ./
 COPY prisma ./prisma/
 COPY tsconfig*.json ./
 
-# Install ALL dependencies (including devDependencies needed for build)
+# Install ALL dependencies
 RUN npm install --legacy-peer-deps
 
-# Generate Prisma client using the locally installed version (not npx which downloads latest)
+# Generate Prisma client using the locally installed version
 RUN ./node_modules/.bin/prisma generate
 
 # Copy source and build
@@ -32,11 +36,13 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
+ENV NODE_ENV=production
+
 # Copy dependency manifests and prisma schema
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install production dependencies only
+# Install production dependencies only (prisma CLI is now in dependencies, so it's included)
 RUN npm install --omit=dev --legacy-peer-deps
 
 # Generate Prisma client using the locally installed version
