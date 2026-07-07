@@ -10,16 +10,20 @@ datasource db {
 
 enum Role {
   USER
+  EMPLOYEE
+  BRANCH_MANAGER
   ADMIN
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  name      String
-  email     String   @unique
-  phone     String   @unique
-  password  String
+  id                  Int              @id @default(autoincrement())
+  name                String
+  email               String           @unique
+  phone               String           @unique
+  password            String
   role                Role             @default(USER)
+  regionId            Int?
+  region              Region?          @relation("StaffRegion", fields: [regionId], references: [id])
   resetCode           String?
   resetCodeExpiry     DateTime?
   resetCodeLastSentAt DateTime?
@@ -42,26 +46,40 @@ model Region {
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   ServiceRequests    ServiceRequest[]
+  staff              User[]           @relation("StaffRegion")
 }
 
 enum RequestStatus {
   PENDING
   ACCEPTED
   REJECTED
+  PENDING_REJECTION
 }
 
 model ServiceRequest {
-  id           Int           @id @default(autoincrement())
-  user         User          @relation(fields: [userId], references: [id])
-  userId       Int
-  region       Region        @relation(fields: [regionId], references: [id])
-  regionId     Int
-  serviceId    Int
-  message      String?       @db.Text
-  status       RequestStatus @default(PENDING)
-  rejectReason String?       @db.Text
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id                     Int           @id @default(autoincrement())
+  user                   User          @relation(fields: [userId], references: [id])
+  userId                 Int
+  region                 Region        @relation(fields: [regionId], references: [id])
+  regionId               Int
+  serviceId              Int
+  message                String?       @db.Text
+  status                 RequestStatus @default(PENDING)
+  rejectReason           String?       @db.Text
+  rejectionRequestedBy   Int?
+  rejectionRequestedAt   DateTime?
+  rejectionRequestReason String?       @db.Text
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+}
+
+model RolePermission {
+  id         Int     @id @default(autoincrement())
+  role       Role
+  permission String
+  granted    Boolean @default(true)
+
+  @@unique([role, permission])
 }
 
 model ContactMessage {

@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { PermissionsService } from '../permissions/permissions.service';
 
 @Injectable()
 export class AuthService {
@@ -12,6 +13,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private whatsappService: WhatsappService,
+    private permissionsService: PermissionsService,
   ) {}
 
   async signup(dto: SignupDto) {
@@ -44,7 +46,7 @@ export class AuthService {
       },
     });
 
-    return this.signToken(user.id, user.email, user.role);
+    return this.signToken(user.id, user.email, user.role, user.name, null);
   }
 
   async login(dto: LoginDto) {
@@ -61,22 +63,28 @@ export class AuthService {
       throw new UnauthorizedException('البريد الإلكتروني أو كلمة المرور غير صحيحة');
     }
 
-    return this.signToken(user.id, user.email, user.role);
+    return this.signToken(user.id, user.email, user.role, user.name, user.regionId);
   }
 
-  private async signToken(userId: number, email: string, role: string) {
-    const payload = { sub: userId, email, role };
+  private async signToken(userId: number, email: string, role: string, name: string, regionId: number | null) {
+    const payload = { sub: userId, email, role, regionId };
     const token = await this.jwtService.signAsync(payload, {
       expiresIn: '7d',
       secret: process.env.JWT_SECRET || 'super-secret',
     });
 
+    // Fetch effective permissions for the user's role
+    const permissions = await this.permissionsService.getEffectivePermissions(role);
+
     return {
       access_token: token,
       user: {
         id: userId,
+        name,
         email,
         role,
+        regionId,
+        permissions,
       }
     };
   }
@@ -90,6 +98,8 @@ export class AuthService {
         email: true,
         phone: true,
         role: true,
+        regionId: true,
+        region: { select: { id: true, name: true } },
         createdAt: true,
       }
     });

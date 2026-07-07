@@ -3,6 +3,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtModule } from '@nestjs/jwt';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { PermissionsModule } from '../permissions/permissions.module';
 
 @Module({
   imports: [
@@ -12,8 +13,10 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
       signOptions: { expiresIn: '7d' },
     }),
     WhatsappModule,
+    PermissionsModule,
   ],
   controllers: [AuthController],
   providers: [AuthService],
 })
 export class AuthModule {}
+
