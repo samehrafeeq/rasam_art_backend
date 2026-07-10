@@ -73,8 +73,8 @@ export class AuthService {
       secret: process.env.JWT_SECRET || 'super-secret',
     });
 
-    // Fetch effective permissions for the user's role
-    const permissions = await this.permissionsService.getEffectivePermissions(role);
+    // Fetch effective permissions for the user (role + per-user overrides)
+    const permissions = await this.permissionsService.getEffectivePermissions(role, userId);
 
     return {
       access_token: token,

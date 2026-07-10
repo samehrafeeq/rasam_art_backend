@@ -71,7 +71,7 @@ function runMigrations() {
       ? '.\\node_modules\\.bin\\prisma'
       : './node_modules/.bin/prisma');
   try {
-    execSync(`${prismaBin} db push --accept-data-loss`, { stdio: 'pipe' });
+    execSync(`${prismaBin} db push`, { stdio: 'pipe' });
     console.log('✅ Schema pushed successfully.');
   } catch (err: any) {
     const output = (err.stdout?.toString() || '') + (err.stderr?.toString() || '') + err.message;

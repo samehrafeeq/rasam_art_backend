@@ -30,6 +30,7 @@ model User {
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
   ServiceRequests     ServiceRequest[]
+  userPermissions     UserPermission[]
 }
 
 model WhatsappSession {
@@ -89,4 +90,14 @@ model ContactMessage {
   phone     String
   message   String   @db.Text
   createdAt DateTime @default(now())
+}
+
+model UserPermission {
+  id         Int     @id @default(autoincrement())
+  userId     Int
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission String
+  granted    Boolean @default(true)
+
+  @@unique([userId, permission])
 }

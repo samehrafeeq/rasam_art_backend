@@ -60,27 +60,157 @@ export class PermissionsService {
   }
 
   /**
-   * Get effective permissions for a single role (used at login / guard time).
+   * Get effective permissions for a user.
+   * Priority: UserPermission overrides > RolePermission overrides > Default role permissions
+   * If userId is provided, per-user overrides are applied on top of role permissions.
    */
-  async getEffectivePermissions(role: string): Promise<string[]> {
+  async getEffectivePermissions(role: string, userId?: number): Promise<string[]> {
     if (role === 'ADMIN') return [...ALL_PERMISSIONS];
     if (role === 'USER') return [];
 
-    const defaults = new Set(DEFAULT_PERMISSIONS[role] || []);
+    // Step 1: Start with default role permissions
+    const perms = new Set<string>(DEFAULT_PERMISSIONS[role] || []);
 
-    const overrides = await this.prisma.rolePermission.findMany({
+    // Step 2: Apply role-level overrides from DB
+    const roleOverrides = await this.prisma.rolePermission.findMany({
       where: { role: role as any },
     });
 
-    for (const override of overrides) {
+    for (const override of roleOverrides) {
       if (override.granted) {
-        defaults.add(override.permission as Permission);
+        perms.add(override.permission as Permission);
       } else {
-        defaults.delete(override.permission as Permission);
+        perms.delete(override.permission as Permission);
       }
     }
 
-    return Array.from(defaults);
+    // Step 3: Apply per-user overrides (highest priority)
+    if (userId) {
+      const userOverrides = await this.prisma.userPermission.findMany({
+        where: { userId },
+      });
+
+      for (const override of userOverrides) {
+        if (override.granted) {
+          perms.add(override.permission);
+        } else {
+          perms.delete(override.permission);
+        }
+      }
+    }
+
+    return Array.from(perms);
+  }
+
+  /**
+   * Get the per-user permission overrides for a specific user.
+   * Returns all permissions with their effective state and override source.
+   */
+  async getUserPermissionDetails(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, role: true },
+    });
+
+    if (!user) return null;
+
+    // Get role-level effective permissions (without user overrides)
+    const rolePerms = new Set<string>(
+      await this.getEffectivePermissions(user.role),
+    );
+
+    // Get user-level overrides
+    const userOverrides = await this.prisma.userPermission.findMany({
+      where: { userId },
+    });
+    const userOverrideMap = new Map(
+      userOverrides.map((o) => [o.permission, o.granted]),
+    );
+
+    // Build detailed list
+    const details = ALL_PERMISSIONS.map((perm) => {
+      const fromRole = rolePerms.has(perm);
+      const hasUserOverride = userOverrideMap.has(perm);
+      const userOverrideValue = userOverrideMap.get(perm);
+
+      let effective: boolean;
+      let source: 'role' | 'user_granted' | 'user_revoked' | 'none';
+
+      if (hasUserOverride) {
+        effective = userOverrideValue!;
+        source = userOverrideValue ? 'user_granted' : 'user_revoked';
+      } else {
+        effective = fromRole;
+        source = fromRole ? 'role' : 'none';
+      }
+
+      return {
+        permission: perm,
+        label: PERMISSION_LABELS[perm] || perm,
+        effective,
+        fromRole,
+        source,
+      };
+    });
+
+    return {
+      user: { id: user.id, name: user.name, role: user.role },
+      permissions: details,
+    };
+  }
+
+  /**
+   * Update per-user permission overrides.
+   * Accepts an array of { permission, granted } objects.
+   * If a user override matches the role-level effective permission, remove the override.
+   */
+  async updateUserPermissions(
+    userId: number,
+    updates: { permission: string; granted: boolean }[],
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+
+    if (!user) return null;
+
+    // Get role-level effective permissions (without user overrides)
+    const roleEffective = new Set<string>(
+      await this.getEffectivePermissions(user.role),
+    );
+
+    for (const { permission, granted } of updates) {
+      const roleHas = roleEffective.has(permission);
+
+      if (granted === roleHas) {
+        // Matches role default → remove user override if exists
+        await this.prisma.userPermission.deleteMany({
+          where: { userId, permission },
+        });
+      } else {
+        // Differs from role default → upsert user override
+        await this.prisma.userPermission.upsert({
+          where: {
+            userId_permission: { userId, permission },
+          },
+          create: { userId, permission, granted },
+          update: { granted },
+        });
+      }
+    }
+
+    return this.getUserPermissionDetails(userId);
+  }
+
+  /**
+   * Reset all per-user permission overrides for a user (back to role defaults).
+   */
+  async resetUserPermissions(userId: number) {
+    await this.prisma.userPermission.deleteMany({
+      where: { userId },
+    });
+    return this.getUserPermissionDetails(userId);
   }
 
   /**

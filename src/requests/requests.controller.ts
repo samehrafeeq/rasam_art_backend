@@ -1,18 +1,17 @@
 import { Controller, Get, Post, Body, Patch, Param, Query, UseGuards, Request, ForbiddenException } from '@nestjs/common';
 import { RequestsService } from './requests.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { RequestStatus, Role } from '@prisma/client';
+import { RequestStatus } from '@prisma/client';
 import { AuthGuard } from '../auth/auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { RequirePermission } from '../auth/permissions.decorator';
-import { DEFAULT_PERMISSIONS } from '../auth/permissions';
+import { PermissionsService } from '../permissions/permissions.service';
 
 @Controller('requests')
 @UseGuards(AuthGuard)
 export class RequestsController {
   constructor(
     private readonly requestsService: RequestsService,
-    private readonly prisma: PrismaService
+    private readonly permissionsService: PermissionsService,
   ) {}
 
   @Post()
@@ -47,17 +46,9 @@ export class RequestsController {
 
     // For non-USER roles, check if they have requests.view permission
     if (user.role !== 'ADMIN') {
-      const perms = new Set<string>(DEFAULT_PERMISSIONS[user.role] || []);
-      const overrides = await this.prisma.rolePermission.findMany({
-        where: { role: user.role as Role }
-      });
+      const perms = await this.permissionsService.getEffectivePermissions(user.role, user.sub);
       
-      for (const override of overrides) {
-        if (override.granted) perms.add(override.permission);
-        else perms.delete(override.permission);
-      }
-      
-      if (!perms.has('requests.view')) {
+      if (!perms.includes('requests.view')) {
         throw new ForbiddenException('لا تملك صلاحية عرض الطلبات');
       }
     }

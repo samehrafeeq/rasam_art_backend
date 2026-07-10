@@ -6,14 +6,13 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PERMISSIONS_KEY } from './permissions.decorator';
-import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS } from './permissions';
-import { PrismaService } from '../prisma/prisma.service';
+import { PermissionsService } from '../permissions/permissions.service';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(
     private reflector: Reflector,
-    private prisma: PrismaService,
+    private permissionsService: PermissionsService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -40,8 +39,11 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
-    // Get effective permissions for the user's role
-    const effectivePermissions = await this.getEffectivePermissions(user.role);
+    // Get effective permissions for the user (role + per-user overrides)
+    const effectivePermissions = await this.permissionsService.getEffectivePermissions(
+      user.role,
+      user.sub,
+    );
 
     // Check that all required permissions are granted
     const hasPermission = requiredPermissions.every((p) =>
@@ -53,31 +55,5 @@ export class PermissionsGuard implements CanActivate {
     }
 
     return true;
-  }
-
-  /**
-   * Get the effective permissions for a role.
-   * Starts with the default permissions, then applies any
-   * custom overrides stored in the RolePermission table.
-   */
-  private async getEffectivePermissions(role: string): Promise<string[]> {
-    // Start with defaults
-    const defaults = new Set<string>(DEFAULT_PERMISSIONS[role] || []);
-
-    // Fetch custom overrides from DB
-    const overrides = await this.prisma.rolePermission.findMany({
-      where: { role: role as any },
-    });
-
-    // Apply overrides
-    for (const override of overrides) {
-      if (override.granted) {
-        defaults.add(override.permission);
-      } else {
-        defaults.delete(override.permission);
-      }
-    }
-
-    return Array.from(defaults);
   }
 }
