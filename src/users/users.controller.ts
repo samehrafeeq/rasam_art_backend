@@ -76,12 +76,22 @@ export class UsersController {
       throw new ForbiddenException('الرجاء إكمال جميع البيانات المطلوبة');
     }
 
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email: body.email }
+    const existingUser = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: body.email },
+          { phone: body.phone }
+        ]
+      }
     });
     
     if (existingUser) {
-      throw new ForbiddenException('البريد الإلكتروني مسجل مسبقاً');
+      if (existingUser.email === body.email) {
+        throw new ForbiddenException('البريد الإلكتروني مسجل مسبقاً');
+      }
+      if (existingUser.phone === body.phone) {
+        throw new ForbiddenException('رقم الهاتف مسجل مسبقاً');
+      }
     }
 
     if (req.user.role === 'BRANCH_MANAGER') {
@@ -147,6 +157,20 @@ export class UsersController {
              throw new ForbiddenException('لا تملك صلاحية تغيير أدوار المستخدمين');
          }
       }
+    }
+
+    if (body.email) {
+      const existingEmail = await this.prisma.user.findFirst({
+        where: { email: body.email, id: { not: Number(id) } }
+      });
+      if (existingEmail) throw new ForbiddenException('البريد الإلكتروني مستخدم لحساب آخر');
+    }
+
+    if (body.phone) {
+      const existingPhone = await this.prisma.user.findFirst({
+        where: { phone: body.phone, id: { not: Number(id) } }
+      });
+      if (existingPhone) throw new ForbiddenException('رقم الهاتف مستخدم لحساب آخر');
     }
 
     return this.prisma.user.update({
