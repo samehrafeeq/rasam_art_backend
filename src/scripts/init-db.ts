@@ -62,7 +62,52 @@ async function createDatabaseIfNotExists() {
 
 // ─── Step 2: Run Prisma Migrations ───────────────────────────────────────────
 
-function runMigrations() {
+/**
+ * Some schema changes (like adding a required column to WhatsappSession)
+ * cannot run against existing rows. We clear those rows safely before pushing
+ * since they are just temporary auth tokens — not user data.
+ * The user will need to re-scan the WhatsApp QR once after this migration.
+ */
+async function clearObsoleteWhatsappSessions() {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) return;
+
+  const { user, password, host, port, database } = parseDatabaseUrl(dbUrl);
+
+  const connection = await mysql.createConnection({
+    host, port, user, password: password || undefined, database,
+  });
+
+  try {
+    // Check if WhatsappSession table exists and has old rows without instanceId
+    const [cols] = await connection.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'WhatsappSession' AND COLUMN_NAME = 'instanceId'`,
+      [database]
+    ) as any[];
+
+    if (cols.length === 0) {
+      // Column doesn't exist yet → old schema → clear sessions to allow migration
+      const [rows] = await connection.query(
+        `SELECT COUNT(*) as count FROM \`${database}\`.\`WhatsappSession\``
+      ) as any[];
+      const count = rows[0]?.count ?? 0;
+      if (count > 0) {
+        await connection.query(`DELETE FROM \`${database}\`.\`WhatsappSession\``);
+        console.log(`🧹 Cleared ${count} old WhatsApp session rows (schema migration — re-scan QR once).`);
+      }
+    }
+  } catch {
+    // Table may not exist yet on first run — that's fine
+  } finally {
+    await connection.end();
+  }
+}
+
+async function runMigrations() {
+  // Clear incompatible session rows before schema push
+  await clearObsoleteWhatsappSessions();
+
   console.log('\n📦 Pushing Prisma schema to database...');
   // Use local prisma binary to avoid npx downloading the latest version (v7+)
   // which is incompatible with our schema format
@@ -118,7 +163,7 @@ async function seedAdmin() {
 async function main() {
   console.log('🚀 Initializing database...');
   await createDatabaseIfNotExists();
-  runMigrations();
+  await runMigrations();
   await seedAdmin();
   console.log('\n✨ Database initialization complete. Starting app...\n');
 }
