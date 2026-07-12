@@ -11,6 +11,19 @@ export class RequestsService {
     private whatsapp: WhatsappService
   ) {}
 
+  /**
+   * Sends a WhatsApp message to all ADMIN users using the branch's assigned instance.
+   */
+  private async notifyAdmins(regionId: number, text: string) {
+    const admins = await this.prisma.user.findMany({
+      where: { role: 'ADMIN' },
+      select: { phone: true },
+    });
+    for (const admin of admins) {
+      this.whatsapp.sendMessageForRegion(regionId, admin.phone, text).catch(() => {});
+    }
+  }
+
   async create(data: { userId: number; regionId: number; serviceId: number; message?: string }) {
     const request = await this.prisma.serviceRequest.create({
       data: {
@@ -33,7 +46,19 @@ export class RequestsService {
     message += `⏳ *حالة الطلب:* قيد المراجعة\n\n`;
     message += `سيقوم فريقنا بمراجعة طلبك وإفادتك في أقرب وقت ممكن. شكراً لثقتكم بنا! 🌟`;
 
-    this.whatsapp.sendMessage(request.user.phone, message).catch(() => {});
+    // Notify client
+    this.whatsapp.sendMessageForRegion(request.regionId, request.user.phone, message).catch(() => {});
+
+    // Notify all admins
+    const serviceName2 = serviceName;
+    let adminMsg = `🔔 *طلب جديد — رسّام آرت*\n\n`;
+    adminMsg += `👤 *العميل:* ${request.user.name}\n`;
+    adminMsg += `📞 *رقمه:* ${request.user.phone}\n`;
+    adminMsg += `📌 *الخدمة:* ${serviceName2}\n`;
+    adminMsg += `📍 *المنطقة:* ${request.region?.name || 'غير محدد'}\n`;
+    adminMsg += `🔢 *رقم الطلب:* #${request.id}\n\n`;
+    adminMsg += `يرجى مراجعة الطلب من لوحة التحكم.`;
+    this.notifyAdmins(request.regionId, adminMsg).catch(() => {});
 
     return request;
   }
@@ -100,8 +125,21 @@ export class RequestsService {
         message += `\nنتمنى لكم التوفيق، ونسعد بخدمتكم في طلبات أخرى.`;
       }
 
-      // Fire and forget
-      this.whatsapp.sendMessage(request.user.phone, message).catch(() => {});
+      // Fire and forget — notify client
+      this.whatsapp.sendMessageForRegion(request.regionId, request.user.phone, message).catch(() => {});
+
+      // Notify all admins on rejection
+      if (!isAccepted) {
+        const serviceName_ = serviceName;
+        let adminMsg = `❌ *تم رفض طلب — رسّام آرت*\n\n`;
+        adminMsg += `👤 *العميل:* ${request.user.name}\n`;
+        adminMsg += `📞 *رقمه:* ${request.user.phone}\n`;
+        adminMsg += `📌 *الخدمة:* ${serviceName_}\n`;
+        adminMsg += `📍 *المنطقة:* ${request.region?.name || 'غير محدد'}\n`;
+        adminMsg += `🔢 *رقم الطلب:* #${request.id}\n`;
+        if (data.rejectReason) adminMsg += `📝 *السبب:* ${data.rejectReason}\n`;
+        this.notifyAdmins(request.regionId, adminMsg).catch(() => {});
+      }
     }
 
     return updated;
@@ -152,7 +190,7 @@ export class RequestsService {
         if (reason) msg += `📝 السبب: ${reason}\n`;
         msg += `\nيرجى مراجعة الطلب من لوحة التحكم.`;
 
-        this.whatsapp.sendMessage(manager.phone, msg).catch(() => {});
+        this.whatsapp.sendMessageForRegion(request.regionId, manager.phone, msg).catch(() => {});
       }
     }
 
@@ -201,7 +239,7 @@ export class RequestsService {
       }
       message += `\nنتمنى لكم التوفيق، ونسعد بخدمتكم في طلبات أخرى.`;
 
-      this.whatsapp.sendMessage(request.user.phone, message).catch(() => {});
+      this.whatsapp.sendMessageForRegion(request.regionId, request.user.phone, message).catch(() => {});
 
       return updated;
     } else {

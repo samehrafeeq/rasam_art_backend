@@ -6,21 +6,22 @@ async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule);
   const whatsappService = app.get(WhatsappService);
   
-  // Wait for connection
   console.log('Waiting 5s for whatsapp connection...');
   await new Promise(resolve => setTimeout(resolve, 5000));
   
-  const status = await whatsappService.getStatus();
-  console.log('Status:', status);
+  const instances = await whatsappService.getAllInstancesStatus();
+  console.log('Instances:', instances);
   
-  if (status.status === 'CONNECTED') {
-    console.log('Sending test message to 0509756675...');
-    const result = await whatsappService.sendMessage('0509756675', 'رسالة تجريبية من النظام للتأكد من عمل الواتساب 🛠️');
+  const connected = instances.find(i => i.status === 'CONNECTED');
+  if (connected) {
+    console.log(`Sending test message via instance: ${connected.name}...`);
+    const result = await whatsappService.sendMessageFromInstance(connected.id, '0509756675', 'رسالة تجريبية من النظام للتأكد من عمل الواتساب 🛠️');
     console.log('Send result:', result);
   } else {
-    console.log('Not connected, cannot send message.');
+    console.log('No connected instances found.');
   }
   
   await app.close();
 }
-bootstrap();
+
+bootstrap().catch(console.error);

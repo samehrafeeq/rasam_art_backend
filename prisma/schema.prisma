@@ -33,21 +33,33 @@ model User {
   userPermissions     UserPermission[]
 }
 
+model WhatsappInstance {
+  id        Int                @id @default(autoincrement())
+  name      String
+  createdAt DateTime           @default(now())
+  sessions  WhatsappSession[]
+  regions   Region[]
+}
+
 model WhatsappSession {
-  id    String @id
-  data  Json   @db.Json
+  id         String          @id
+  data       Json            @db.Json
+  instanceId Int
+  instance   WhatsappInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
 }
 
 model Region {
-  id                 Int              @id @default(autoincrement())
-  name               String
-  description        String?          @db.Text
-  phoneNumbers       String?          @db.Text
-  disabledServiceIds Json             @default("[]")
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  ServiceRequests    ServiceRequest[]
-  staff              User[]           @relation("StaffRegion")
+  id                  Int               @id @default(autoincrement())
+  name                String
+  description         String?           @db.Text
+  phoneNumbers        String?           @db.Text
+  disabledServiceIds  Json              @default("[]")
+  whatsappInstanceId  Int?
+  whatsappInstance    WhatsappInstance? @relation(fields: [whatsappInstanceId], references: [id], onDelete: SetNull)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  ServiceRequests     ServiceRequest[]
+  staff               User[]            @relation("StaffRegion")
 }
 
 enum RequestStatus {

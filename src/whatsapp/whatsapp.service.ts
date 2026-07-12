@@ -1,48 +1,72 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import makeWASocket, { 
-  DisconnectReason, 
-  AuthenticationState, 
+import makeWASocket, {
+  DisconnectReason,
+  AuthenticationState,
   initAuthCreds,
   BufferJSON,
-  SignalDataTypeMap
+  SignalDataTypeMap,
 } from '@whiskeysockets/baileys';
 import * as QRCode from 'qrcode';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 
+interface InstanceState {
+  socket: any;
+  status: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED';
+  qrUrl: string | null;
+  phoneNumber: string | null;
+}
+
 @Injectable()
 export class WhatsappService implements OnModuleInit, OnModuleDestroy {
-  private socket: any;
-  private status: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' = 'DISCONNECTED';
-  private qrUrl: string | null = null;
+  private instances = new Map<number, InstanceState>();
   private readonly logger = new Logger(WhatsappService.name);
 
   constructor(private prisma: PrismaService) {}
 
   async onModuleInit() {
-    this.logger.log('Initializing WhatsApp Service...');
-    await this.connectToWhatsApp();
-  }
-
-  async onModuleDestroy() {
-    if (this.socket) {
-      this.socket.end(undefined);
+    this.logger.log('Initializing WhatsApp Multi-Instance Service...');
+    // Auto-connect all existing instances from DB
+    const allInstances = await this.prisma.whatsappInstance.findMany();
+    for (const instance of allInstances) {
+      await this.connectInstance(instance.id);
     }
   }
 
-  private async usePrismaAuthState(): Promise<{ state: AuthenticationState, saveCreds: () => Promise<void> }> {
+  async onModuleDestroy() {
+    for (const [, state] of this.instances) {
+      if (state.socket) {
+        try { state.socket.end(undefined); } catch {}
+      }
+    }
+  }
+
+  // ─── Auth State per Instance ─────────────────────────────────────────────
+
+  private async usePrismaAuthState(instanceId: number): Promise<{
+    state: AuthenticationState;
+    saveCreds: () => Promise<void>;
+  }> {
+    const prefix = `${instanceId}:`;
+
     const writeData = async (data: any, id: string) => {
       await this.prisma.whatsappSession.upsert({
-        where: { id },
+        where: { id: `${prefix}${id}` },
         update: { data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)) },
-        create: { id, data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)) },
+        create: {
+          id: `${prefix}${id}`,
+          data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)),
+          instanceId,
+        },
       });
     };
 
     const readData = async (id: string) => {
-      const session = await this.prisma.whatsappSession.findUnique({ where: { id } });
-      if (session && session.data) {
+      const session = await this.prisma.whatsappSession.findUnique({
+        where: { id: `${prefix}${id}` },
+      });
+      if (session?.data) {
         return JSON.parse(JSON.stringify(session.data), BufferJSON.reviver);
       }
       return null;
@@ -50,10 +74,10 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
 
     const removeData = async (id: string) => {
       try {
-        await this.prisma.whatsappSession.delete({ where: { id } });
-      } catch (err) {
-        // ignore if not found
-      }
+        await this.prisma.whatsappSession.delete({
+          where: { id: `${prefix}${id}` },
+        });
+      } catch {}
     };
 
     const creds = (await readData('creds')) || initAuthCreds();
@@ -68,13 +92,10 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
               ids.map(async (id) => {
                 let value = await readData(`${type}-${id}`);
                 if (type === 'app-state-sync-key' && value) {
-                  value = {
-                    ...value,
-                    get: undefined
-                  }; // Workaround for Baileys types
+                  value = { ...value, get: undefined };
                 }
                 data[id] = value;
-              })
+              }),
             );
             return data;
           },
@@ -92,125 +113,247 @@ export class WhatsappService implements OnModuleInit, OnModuleDestroy {
               }
             }
             await Promise.all(tasks);
-          }
-        }
+          },
+        },
       },
-      saveCreds: () => writeData(creds, 'creds')
+      saveCreds: () => writeData(creds, 'creds'),
     };
   }
 
-  async connectToWhatsApp() {
-    const { state, saveCreds } = await this.usePrismaAuthState();
+  // ─── Connect Instance ────────────────────────────────────────────────────
 
-    this.socket = makeWASocket({
+  async connectInstance(instanceId: number) {
+    // If already connected, skip
+    const existing = this.instances.get(instanceId);
+    if (existing?.status === 'CONNECTED') return;
+
+    const { state, saveCreds } = await this.usePrismaAuthState(instanceId);
+
+    const socket = makeWASocket({
       auth: state,
       printQRInTerminal: false,
       logger: pino({ level: 'silent' }) as any,
     });
 
-    this.socket.ev.on('connection.update', async (update: any) => {
+    const instanceState: InstanceState = {
+      socket,
+      status: 'CONNECTING',
+      qrUrl: null,
+      phoneNumber: null,
+    };
+    this.instances.set(instanceId, instanceState);
+
+    socket.ev.on('connection.update', async (update: any) => {
       const { connection, lastDisconnect, qr } = update;
-      
+
       if (qr) {
-        this.status = 'CONNECTING';
-        this.qrUrl = await QRCode.toDataURL(qr);
-        this.logger.log('New QR code generated.');
+        instanceState.status = 'CONNECTING';
+        instanceState.qrUrl = await QRCode.toDataURL(qr);
+        this.logger.log(`[Instance ${instanceId}] New QR code generated.`);
       }
 
       if (connection === 'close') {
-        const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-        this.logger.warn(`Connection closed. Reconnecting: ${shouldReconnect}`);
-        
-        this.status = 'DISCONNECTED';
-        this.qrUrl = null;
+        const shouldReconnect =
+          (lastDisconnect?.error as Boom)?.output?.statusCode !==
+          DisconnectReason.loggedOut;
+
+        this.logger.warn(
+          `[Instance ${instanceId}] Connection closed. Reconnecting: ${shouldReconnect}`,
+        );
+
+        instanceState.status = 'DISCONNECTED';
+        instanceState.qrUrl = null;
+        instanceState.phoneNumber = null;
 
         if (shouldReconnect) {
-          setTimeout(() => this.connectToWhatsApp(), 3000);
+          setTimeout(() => this.connectInstance(instanceId), 3000);
         } else {
-          // Logged out. Delete session.
-          await this.prisma.whatsappSession.deleteMany();
-          this.logger.log('User logged out, session deleted.');
+          // Logged out — clear sessions for this instance
+          await this.prisma.whatsappSession.deleteMany({
+            where: { instanceId },
+          });
+          this.instances.delete(instanceId);
+          this.logger.log(`[Instance ${instanceId}] Logged out, session deleted.`);
         }
       } else if (connection === 'open') {
-        this.status = 'CONNECTED';
-        this.qrUrl = null;
-        this.logger.log('Successfully connected to WhatsApp!');
+        instanceState.status = 'CONNECTED';
+        instanceState.qrUrl = null;
+        if (socket.user?.id) {
+          const jid = socket.user.id;
+          instanceState.phoneNumber = jid.split(':')[0].split('@')[0];
+        }
+        this.logger.log(
+          `[Instance ${instanceId}] Connected! Phone: ${instanceState.phoneNumber}`,
+        );
       }
     });
 
-    this.socket.ev.on('creds.update', saveCreds);
+    socket.ev.on('creds.update', saveCreds);
   }
 
-  async getStatus() {
-    let phoneNumber = null;
-    if (this.status === 'CONNECTED' && this.socket?.user?.id) {
-      // id is usually something like 9665XXXXXXX:2@s.whatsapp.net
-      const jid = this.socket.user.id;
-      phoneNumber = jid.split(':')[0].split('@')[0];
-    }
-    
+  // ─── Public API ──────────────────────────────────────────────────────────
+
+  /** Create a new WhatsApp instance in DB and start connecting */
+  async createInstance(name: string) {
+    const instance = await this.prisma.whatsappInstance.create({
+      data: { name },
+    });
+    await this.connectInstance(instance.id);
+    // Wait briefly for QR to generate
+    await new Promise((r) => setTimeout(r, 2000));
+    return this.getInstanceStatus(instance.id);
+  }
+
+  /** Get status of all instances */
+  async getAllInstancesStatus() {
+    const dbInstances = await this.prisma.whatsappInstance.findMany({
+      include: { regions: { select: { id: true, name: true } } },
+    });
+
+    return dbInstances.map((inst) => {
+      const state = this.instances.get(inst.id);
+      return {
+        id: inst.id,
+        name: inst.name,
+        status: state?.status ?? 'DISCONNECTED',
+        qr: state?.qrUrl ?? null,
+        phoneNumber: state?.phoneNumber ?? null,
+        regions: inst.regions,
+      };
+    });
+  }
+
+  /** Get status of a single instance */
+  async getInstanceStatus(instanceId: number) {
+    const inst = await this.prisma.whatsappInstance.findUnique({
+      where: { id: instanceId },
+      include: { regions: { select: { id: true, name: true } } },
+    });
+    if (!inst) return null;
+
+    const state = this.instances.get(instanceId);
     return {
-      status: this.status,
-      qr: this.qrUrl,
-      phoneNumber
+      id: inst.id,
+      name: inst.name,
+      status: state?.status ?? 'DISCONNECTED',
+      qr: state?.qrUrl ?? null,
+      phoneNumber: state?.phoneNumber ?? null,
+      regions: inst.regions,
     };
   }
 
-  async getQrCode() {
-    let phoneNumber = null;
-    if (this.status === 'CONNECTED' && this.socket?.user?.id) {
-      const jid = this.socket.user.id;
-      phoneNumber = jid.split(':')[0].split('@')[0];
-      return { status: 'CONNECTED', qr: null, phoneNumber };
-    }
-    
-    if (!this.socket || this.status === 'DISCONNECTED') {
-      await this.connectToWhatsApp();
-      // wait a bit for QR to generate
-      await new Promise(resolve => setTimeout(resolve, 2000));
+  /** Request QR code for an instance (reconnect if needed) */
+  async getQrForInstance(instanceId: number) {
+    const state = this.instances.get(instanceId);
+
+    if (state?.status === 'CONNECTED') {
+      return this.getInstanceStatus(instanceId);
     }
 
-    return {
-      status: this.status,
-      qr: this.qrUrl,
-      phoneNumber: null
-    };
+    // Reconnect to generate QR
+    if (!state || state.status === 'DISCONNECTED') {
+      await this.connectInstance(instanceId);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    return this.getInstanceStatus(instanceId);
   }
 
-  async logout() {
-    if (this.socket) {
-      await this.socket.logout();
+  /** Logout a specific instance */
+  async logoutInstance(instanceId: number) {
+    const state = this.instances.get(instanceId);
+    if (state?.socket) {
+      try { await state.socket.logout(); } catch {}
     }
-    await this.prisma.whatsappSession.deleteMany();
-    this.status = 'DISCONNECTED';
-    this.qrUrl = null;
+    await this.prisma.whatsappSession.deleteMany({ where: { instanceId } });
+    this.instances.delete(instanceId);
     return { success: true };
   }
 
-  async sendMessage(to: string, text: string) {
-    if (this.status !== 'CONNECTED' || !this.socket) {
-      this.logger.error('WhatsApp is not connected. Cannot send message.');
+  /** Delete an instance entirely */
+  async deleteInstance(instanceId: number) {
+    await this.logoutInstance(instanceId);
+    await this.prisma.whatsappInstance.delete({ where: { id: instanceId } });
+    return { success: true };
+  }
+
+  // ─── Message Sending ─────────────────────────────────────────────────────
+
+  /**
+   * Format a phone number to international format.
+   * Handles Saudi Arabia (05xx / 5xx) and keeps already-international numbers.
+   */
+  private formatPhone(phone: string): string {
+    let formatted = phone.replace(/\D/g, '');
+    if (formatted.startsWith('05')) {
+      formatted = '966' + formatted.slice(1);
+    } else if (formatted.startsWith('5') && formatted.length === 9) {
+      formatted = '9665' + formatted.slice(1);
+    }
+    return formatted;
+  }
+
+  /**
+   * Send a WhatsApp message using the instance assigned to the given region.
+   * Falls back to the first available connected instance if the region has none.
+   */
+  async sendMessageForRegion(regionId: number, to: string, text: string): Promise<boolean> {
+    // 1. Find the region's assigned instance
+    const region = await this.prisma.region.findUnique({
+      where: { id: regionId },
+      select: { whatsappInstanceId: true },
+    });
+
+    let instanceId: number | null = region?.whatsappInstanceId ?? null;
+
+    // 2. If region has no assigned instance, use first connected instance
+    if (!instanceId) {
+      for (const [id, state] of this.instances) {
+        if (state.status === 'CONNECTED') {
+          instanceId = id;
+          break;
+        }
+      }
+    }
+
+    if (!instanceId) {
+      this.logger.warn(`No connected WhatsApp instance available for region ${regionId}`);
+      return false;
+    }
+
+    return this.sendMessageFromInstance(instanceId, to, text);
+  }
+
+  /** Send from a specific instance */
+  async sendMessageFromInstance(instanceId: number, to: string, text: string): Promise<boolean> {
+    const state = this.instances.get(instanceId);
+    if (!state || state.status !== 'CONNECTED' || !state.socket) {
+      this.logger.error(`[Instance ${instanceId}] Not connected. Cannot send.`);
       return false;
     }
 
     try {
-      // Format phone number for Saudi Arabia if it starts with 05
-      let formattedPhone = to.replace(/\D/g, ''); // Remove non-digits
-      if (formattedPhone.startsWith('05')) {
-        formattedPhone = '9665' + formattedPhone.slice(2);
-      } else if (formattedPhone.startsWith('5')) {
-        formattedPhone = '9665' + formattedPhone.slice(1);
-      }
-      
-      // Ensure it ends with @s.whatsapp.net
+      const formattedPhone = this.formatPhone(to);
       const jid = `${formattedPhone}@s.whatsapp.net`;
-      
-      await this.socket.sendMessage(jid, { text });
-      this.logger.log(`Message sent successfully to ${formattedPhone}`);
+      await state.socket.sendMessage(jid, { text });
+      this.logger.log(`[Instance ${instanceId}] Message sent to ${formattedPhone}`);
       return true;
     } catch (error) {
-      this.logger.error(`Failed to send message to ${to}:`, error);
+      this.logger.error(`[Instance ${instanceId}] Failed to send to ${to}:`, error);
       return false;
     }
+  }
+
+  // ─── Legacy compatibility (kept for any direct calls) ──────────────────
+
+  async sendMessage(to: string, text: string): Promise<boolean> {
+    // Use first connected instance
+    for (const [instanceId, state] of this.instances) {
+      if (state.status === 'CONNECTED') {
+        return this.sendMessageFromInstance(instanceId, to, text);
+      }
+    }
+    this.logger.warn('No connected WhatsApp instance available.');
+    return false;
   }
 }

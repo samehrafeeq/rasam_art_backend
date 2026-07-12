@@ -11,7 +11,7 @@ export class RegionsController {
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermission('regions.create')
   @Post()
-  create(@Body() createRegionDto: { name: string; description?: string; phoneNumbers?: string }) {
+  create(@Body() createRegionDto: { name: string; description?: string; phoneNumbers?: string; whatsappInstanceId?: number | null }) {
     return this.regionsService.create(createRegionDto);
   }
 
@@ -29,7 +29,7 @@ export class RegionsController {
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermission('regions.edit')
   @Put(':id')
-  update(@Param('id') id: string, @Body() updateRegionDto: { name?: string; description?: string; phoneNumbers?: string; disabledServiceIds?: any }) {
+  update(@Param('id') id: string, @Body() updateRegionDto: { name?: string; description?: string; phoneNumbers?: string; disabledServiceIds?: any; whatsappInstanceId?: number | null }) {
     return this.regionsService.update(+id, updateRegionDto);
   }
 
